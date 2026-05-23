@@ -133,6 +133,11 @@
 
 ## 8. Explicit Trade-offs Made
 
+- Database: Postgresql
+  - We have relational data
+  - We choose Postgresql over MySQL because data integrity is someting crucial, so we need ACID of Postgresql
+- Programming Language: Java, secure and scalable and good for fintech applications
+
 ## 9. What I'm not sure about
 
 - Non-functional requirement and numbers
