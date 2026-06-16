@@ -363,21 +363,112 @@
 
 ## 6. Non-Functional requirements
 
-- Scalability will be important than consistency, because for v1 we don't support account sharing, we should expect 100 users and on average 10 transactions/user which means around 1000 transactions/day
-- Availability, System should be highly available (99%)
+- Consistency vs Scalabilty:
+  1. In Money systems, Consistency is more important than scalability, because if value is inconsistent this means system is broken whatever number of clients it serves.
+  2. For around 10K transactions/day this can be handled comfortably within one DB Postgres instance.
+  3. Scalability concerns (Sharding, read replicas) should be deferred until number of transactions exceed what a single DB instance can handle.
+- Availability, System should be highly available (99%).
+- Latency target - How fast each operation should respond
+  1. For commit/write transaction in a simple table without complex join it should be within 200 ms for 99% of requests (p99).
+  2. For read transactions list it should be within 100 ms p99.
+- Data Durability - What is the cost of losing data
+  1. In Money systems, Durability should have zero tolerance for committed transaction loss, a committed transaction should survive any single hardware failure.
+  2. This drives decisions like Postgres synchronous commit (not async), DB backups, not using in-memory only storage for financial data
+- RPO and RTO - How you recove for disaster
+  1. Recovery Point Objective (RPO), How much data we can afford to lose in case of disaster? for money systems this should be very little.
+  - RPO of 1 hour, this means we can accept loss of at most last 1 hour transactions.
+  - We can restore from DB backups that is at most 1 hour old.
+  - This tell us how frequently we should do DB backups.
+  2. Recovery Time Objective (RTO), If disaster strikes, how long should it take the system to be online?
+  - RTO of 4 hours, clients can tolerate 4 hours of downtime.
+  - Since it's a personal finance tool, RTO of 4 hours can be tolerated since there is no critical payment is done through our APIs.
+
+  ==> For Banking systems, RPO should be zero and RTO should be minutes.
 
 ## 7. Failure Modes
 
-1. DB unreachable, request failed and return 500 status code
-2. Background jobs crashed, send an alert email or message
-3. Request sent with wrong schema in payload, should return 400 Bad request and mention the error
+1. Mid-transaction crash during balance update:
+   - All balance affecting operations are wrapped in a single DB transaction, if the application crashes before commit DB rolls back all changes, No partial state is possible, The user sees failed request and can safely retry.
+2. Concurrent writes to the same account
+   - The solution is using SELECT FOR UPDATE on the account row when updating it's balance. This locks the row for the duration of the DB transaction. The second request waits until first request commits.
+   - Concurrent transactions on the same account serialize, while concurrent transactions on different accounts proceed in parallel.
+3. DB unreachable
+   - We should return 503 which means a dependent is unavailable while 500 means our code is broken and this is not the case.
+   - Load balancer can redirect to a different instance
+     -If Postgres is unreachable, write endpoints return 503 with retry after header, and React endpoints return 503, no stale cache read because balance accuracy is important than availability.
+4. Background jobs crashes mid-report
+   - Monthly report generation writes to staging table, only after the generation is completed the staged report is swaped to a live table in a single transaction.
+   - If the job crashes, the staging table will contain a partial data that the next run will overwrites, The job is idemponent (running the job twice for the same month will generate the same result)
+5. Authorization failures - account doesn't belong to user
+   - This case wont happen, because all account lookups filter by userId and accountId
+6. Self transfer - from and to account are the same
+   - A transaction where both entries reference the same account. The sum is still zero, so it passes the zero-sum validation, but it's meaningless — money going from Bank to Bank accomplishes nothing and clutters the transaction history.
+   - Decision: Transactions where are enteries reference same account are rejected with 400, Validated at the API layer before reach the DB.
+7. Zero or negative amounts in entries
+   - Zero amount in entries are meaningless and will be reject with 400, Validated at API layer
+   - Negative amount for an entry is valid, negative amount means credit and positive amount means debit, the constraint is that they sum to zero.
+8. Deleting an account that has transactions
+   - A user tries to delete their Bank account, but it has 500 transactions referencing it. If you allow the delete, all those entries have a dangling foreign key. If you cascade delete, you lose financial history.
+   - Decision:
+     - Accounts with existing transaction entries can't be deleted, the API returns 409 conflict with message indicating account has associated transactions.
+     - User can archive(soft-delete) accounts to hide them from active use while perserving history.
+
+9. Clock skew
+   - If your API server's clock and your database server's clock disagree, the created_at timestamp set by the application won't match the database's now(). For ordering transactions, this could mean two transactions appear in the wrong order.
+   - Decision: All timestamps are generated by Postgress (Default now()) rather than application layer, ensuring consistent ordering regardless of which application instance handles the request.
 
 ## 8. Explicit Trade-offs Made
 
-- Database: Postgresql
-  - We have relational data
-  - We choose Postgresql over MySQL because data integrity is someting crucial, so we need ACID of Postgresql
-- Programming Language: Java, secure and scalable and good for fintech applications
+- Postgres over MySQL
+  - Postgres has better query support (CTEs, window functions) needed by reporting features
+  - Postgres has row-level locking(`SELECT FOR UPDATE`) for concurrent balance update patten
+  - Postgres has native JSONB support if we ever need flexible metadata on transactions
+  - Trade-off:
+    - MySQL has larger hiring pool, more hosting options at cheap tiers
+    - Postgres has slightly more operational complexity for backups and replication configuration
+- Java over alternatives
+  - Chose Java because the team is most productive in it and JVM ecosystem has mature financial primitives.
+  - Trade-off:
+    - Higher memory footprint
+    - Slower cold start than GO or Rust
+    - More boilerplate than Kotlin
+    - Accepted because Developer productivity matters more than runtime efficiency at this scale
+- Double-entry over Simplified model
+  - Chose true double-entry(transaction header + enteries table, zero-sum invarient) over simiplified (from/to columns on a single table), this support split transactions and is accounting correct
+  - Trade-off:
+    - Slightly more complex write path (insert header + multiple entries + update multiple balances in one database transaction)
+    - More complex API payload (Array of entries instead of two account fields)
+    - Harder to explain to non-technical stakeholders
+    - Accepted because data model is foundational (migrating from simplified to double-entry would require rewriting every transaction in DB)
+- Soft delete vs Hard delete
+  - Chose soft delete(status Column) over hard delete for transactions, because no financial record is ever physically removed
+  - Trade-off:
+    - Database grows indefinitely
+    - All queries must filter by status
+    - Accepted because audit trial integrity is more important than storage cost at this scale
+- Single currency vs multi-currency
+  - V1 supports single currency per user(set at account creation), Multi-currency and cross-currency transfers deferred to V2
+  - Trade-off:
+    - Users who deal in multiple currencies can't use the system accurately
+    - Accepted because exchange rate handling, currency conversion logic and multi-currency reporting are each a significant features that would double the V1 timeline.
+- Isolation level for balance updates
+  - Chose READ COMMITTED isolation with explicit `SELECT FOR UPDATE` on account rows during balance updates, rather than SERIALIZABLE isolation
+  - Trade-off:
+    - SERIALIZABLE would prevent all anomalies automatically but would serialize all transactions touching the same account and could cause serialization failures requiring application-level retry logic
+    - `SELECT FOR UPDATE` under READ COMMITTED gives us the specific guarantee we need(no lost updates on balances) without serializing unrealted operations
+    - Accepted the only invariant we are protecting is `Balance equals sum of entries` and row-level locking is sufficient for that.
+- Transaction immutability vs mutability
+  - Transactions are immutable after creation. Corrections use a reversal-plus-new-entry pattern rahter than in-place updates.
+  - Trade-off:
+    - More rows in DB (three rows for one correctio instead of one updated row)
+    - Slightly more complex correction flow, and client must understand the concept of linked transactions
+    - Accepted because immutability guarantees a complete audit trial, eliminates the failure mode of partial in-place updates corrupting balances, and follows standard accouting practice
+- Synchronous balance update vs Eventual consistency
+  - Chose synchronous balance updates withing the same DB transaction as entry insert.
+  - Balances are always consistent with the transaction history
+  - Trade-off:
+    - Write latency is higher because the database transaction includes both inserts and balance updates with row-level locks
+    - Accepted because correct balances are a core promise of a money system and the write volume (under 1000/day) doesn't justify the complexity of an async consistency model
 
 ## 9. What I'm not sure about
 
