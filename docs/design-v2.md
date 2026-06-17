@@ -2,7 +2,7 @@
 
 ## 1. Problem and Scope
 
-- Mostpersonal finance apps are either automate everything via bank integration and low accuracy and privacy, or a pure spreadsheets that don't enforce balance integrity.
+- Most personal finance apps are either automate everything via bank integration and low accuracy and privacy, or a pure spreadsheets that don't enforce balance integrity.
   Ledger v1 is for users who want manual transaction entry with strict double-entry correcteness and monthly reporting.
 - This system helps individuals with personal money/expenses tracking and finance, where
   user can add transactions in double-entry format mentioning money went from a specific account to another to help with tracking the money and also adding a user-defined resuable categories with each transaction so user can know what it was used for. Also providing a monthly report for all transactions at the end of each month.
