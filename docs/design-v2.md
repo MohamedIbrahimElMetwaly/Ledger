@@ -472,29 +472,26 @@
 
 ## 9. What I'm not sure about
 
-- Non-functional requirement and numbers
-- How the Trade-offs is made
-- How to choose the right security methods and the security requirements
+- Concurrent balance updates - is SELECT FOR UPDATE enough?
+  - Unsure how to handle deadlocks when two transactions lock accounts in opposite order. Options: always lock accounts in a deterministic order (lower ID first) to prevent deadlocks entirely, or let Postgres detect deadlocks and retry at the application level. Haven't decided which approach is simpler to implement correctly.
+- Balance non-negativity - where to enforce it?
+  - Unsure whether to enforce balance-non-negativity at the database level (CHECK constraint — bulletproof but poor error messages and hard to vary by account type) or application level (flexible but bypassable). Leaning toward application-level with a nightly reconciliation check as a safety net.
+- What happens to balances when a transaction is reversed?
+  - Unsure whether account balances should be stored and updated incrementally (faster, but a single bug can cause permanent drift) or computed on the fly from the sum of all active entries (always correct, but slower as transaction count grows). Could also store both and reconcile — but that adds complexity.
+- Should the background report job lock the data it's reading?
+  - Unsure whether the monthly report job needs a consistent snapshot of the month's transactions. If a user creates a transaction while the job is running, the report might include some effects but not others. Options: run the report inside a REPEATABLE READ transaction (consistent snapshot but holds resources longer), or only generate reports for the previous month and assume the current month is still in flux.
+  - I think if the report job for the last month will run at the first day of next month, we should be good
+- How to handle the 99% availability target on a single server?
+  - Unsure if 99% availability is achievable on a single self-hosted Postgres instance without automated failover. A managed service (like AWS RDS) gives automatic failover but costs more and adds vendor dependency. Need to decide whether the v1 architecture assumes managed Postgres or self-hosted.
 
 ## 10. v1 Cut Line
 
 - What's in v1?<br>
-  1. Add transaction
-  2. Edit transaction
-  3. Retrieve all transactions per month
-  4. Delete a transaction
-  5. Add Account
-  6. Delete account
-  7. Rename account
-  8. Add Category
-  9. Rename Category
-  10. Delete Category
-  11. Reconciliation for the balances at night
-  12. Monthly generated report
-
-- What's in v2?<br>
-  1. Shared accounts
-  2. Upload CSV file of transactions
-  3. Export CSV file of transactions (per month and all)
-  4. Homepage with overview dashboard of the current/selected month transactions/expenses
-  5. Audit or logging mechanism
+  1. Create account (with type: asset/liability/income/expense)
+  2. List accounts with balances
+  3. Create categories
+  4. List categories
+  5. Create transaction (with entries, zero-sum validation, atomic balance update)
+  6. List transactions (with pagination, date range filter, category filter)
+  7. Delete transaction (Reverse transaction)
+  8. Monthly report (Background job, pre-computed spending by category and income vs expenses)
