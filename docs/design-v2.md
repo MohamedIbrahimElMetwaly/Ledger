@@ -1,4 +1,4 @@
-# Ledger - Design doc v1
+# Ledger - Design doc v2
 
 ## 1. Problem and Scope
 
@@ -19,14 +19,48 @@
 - User log every transaction the day it happens or backdated by a few days.
 - User review monthly expenses at the end of each month to adjust next month's budget.
 - User create/add new categories to be used as metadata in each transactions, to know where money goes.
+- User views current balances across all accounts to understand their financial position at any moment.
+- User corrects a transaction they entered incorrectly (eg: wrong amount or category).
 
 ## 3. API Contract
 
 => Base url: /api/v1
-=> Server decode the jwt_token and extract userId and use it in queries to DB
+=> Server decode the jwt_token and extract userId and use it in queries to
+=> All endpoints except /api/auth/login and /api/auth/register require a valid JWT in the Authorization: Bearer <jwt_token> header. The JWT payload contains userId and exp. The server extracts userId to scope all queries to the authenticated user. Tokens expire after 1 hour; expired tokens return 401. Refresh tokens are deferred to v2.
+
+- POST: /api/auth/login
+
+**request**: {
+"email": "user@example.com",
+"password": "secret"
+}
+
+**response**: {
+"access_token": "ey1JhbG",
+"expires_in": 3600
+}
+
+- POST: /api/auth/register
+
+**request**: {
+"email": "user@example.com",
+"password": "secret",
+"name": "username"
+}
+
+**response**: {
+"user_id": "user_213",
+"email": "user@example.com",
+"iat": 170000000000,
+"exp": 170000003600
+}
+
+=> What's in the token? A JWT has a payload(called **claims**) that carries information the server needs without hitting DB on every request. For Ledger, the payload would contain the userId, email, and expiration time. When server receives a request, it decodes the token, read the **userId** claim, and uses that to scope all queries. No DB lookup needed to identify the caller
+=> **iat** is "issued at" — when the token was created. **exp** is when it expires. The server checks exp on every request. If the token is expired, return 401 Unauthorized.
+=> How is expiration handled? the token has TTL(time to live). When it expires, the client gets 401 and must login again. For v1, this is sufficient. In v2, we could add refresh tokens.
 
 - GET: /transactions?limit=20&cursor=abc123&from=2026-01-01&to=2026-01-31 <br>
-  Header: Bearer <jwt_token>
+  Authorization: Bearer <jwt_token>
 
   **response**: {
   data:[
@@ -35,45 +69,11 @@
   "note": "xxxxxx",
   "status": "ACTIVE",
   "date": "202x-xx-xx",
-  "enteries": [
+  "entries": [
   {
   "id": "yyyyyy",
   "account": "Cash",
-  "Category": null,
-  "amount": -200
-  },
-  {
-  "id": "xxyy",
-  "account": {
-  "name": "Expenses",
-  "id": "asd123"
-  },
-  "category": {
-  "name": "Car Wash",
-  "id": "abc123"
-  },
-  "amount": 200
-  }
-  ],
-  }
-  , ....]
-  }, 200 OK
-
-- GET: /transactions?from=2026-01-01&to=2026-01-31 <br>
-  Header: Bearer <jwt_token>
-
-  **response**: {
-  data:[
-  {
-  "id": "xxxxxx",
-  "note": "xxxxxx",
-  "status": "ACTIVE",
-  "date": "202x-xx-xx",
-  "enteries": [
-  {
-  "id": "yyyyyy",
-  "account": "Cash",
-  "Category": null,
+  "category": null,
   "amount": -200
   },
   {
@@ -94,7 +94,7 @@
   }, 200 OK
 
 - GET: /transactions/{transactionId} <br>
-  Header: Bearer <jwt_token>
+  Authorization: Bearer <jwt_token>
 
   **response**: {
   data:
@@ -103,11 +103,14 @@
   "note": "xxxxxx",
   "status": "ACTIVE",
   "date": "202x-xx-xx",
-  "enteries": [
+  "entries": [
   {
   "id": "yyyyyy",
-  "account": "Cash",
-  "Category": null,
+  "account": {
+  "name": "Cash",
+  "id": "abc123",
+  },
+  "category": null,
   "amount": -200
   },
   {
@@ -127,13 +130,13 @@
   }, 200 OK
 
 - POST: /transactions <br>
-  Header: Bearer <jwt_token>
+  Authorization: Bearer <jwt_token>
 
   **request**: {
   transaction: {
   "note": "Note",
   "date": "202x-xx-xx",
-  "enteries": [
+  "entries": [
   {
   "account_id": "Cash",
   "amount": -200
@@ -154,7 +157,7 @@
   "note": "xxxxxx",
   "status": "ACTIVE",
   "date": "202x-xx-xx",
-  "enteries": [
+  "entries": [
   {
   "id": "yyyyyy",
   "account": "Cash",
@@ -177,8 +180,8 @@
   }
   }, 201 OK
 
-- POST: /transactions/{transactionId}/correct <br>
-  Header: <jwt_token>
+- POST: /transactions/{transactionId}/correct (Reversal - delete)<br>
+  Authorization: <jwt_token>
 
   NOTE: Since edit/update is not allowed in financial system, we make a reverse then add new corrected transactions, so will have columns(status:ACTIVE/REVERSED/REVERSAL, reversal_id: (for original which points to reversal record id), corrects_id: (for new record which points to original record)) which can help with this process
 
@@ -186,7 +189,7 @@
   transaction: {
   "note": "Note",
   "date": "202x-xx-xx",
-  "enteries": [
+  "entries": [
   {
   "account_id": "Cash",
   "amount": -200
@@ -208,7 +211,7 @@
   "status": "ACTIVE",
   "date": "202x-xx-xx",
   corrects_id: "transactionId",
-  "enteries": [
+  "entries": [
   {
   "id": "yyyyyy",
   "account": "Cash",
@@ -231,11 +234,8 @@
   }
   }, 201 OK
 
-- DELETE: /transactions/{transactionId} <br>
-  Header: <jwt_token>
-
 - GET: /categories?limit=20&cursor=abc123 <br>
-  Header: <jwt_token>
+  Authorization: <jwt_token>
 
   **response**:{
   data: [
@@ -247,7 +247,7 @@
   }
 
 - POST: /categories <br>
-  Header: <jwt_token>
+  Authorization: <jwt_token>
 
   **request**: {
   category: {
@@ -262,28 +262,8 @@
   }
   }, 201 created
 
-- PUT: /categories/{categoryId} <br>
-  Header: <jwt_token>
-
-  **request**: {
-  category: {
-  categoryName: "yyyyyyy",
-  categoryId: "xxx"
-  }
-  }
-
-  **response**: {
-  data: {
-  categoryName: "yyyyyy",
-  categoryId: "xxx"
-  }
-  }, 200 ok
-
-- DELETE: /categories/{categoryId} <br>
-  Header: <jwt_token>
-
 - GET: /accounts?limit=20&cursor=abc123 <br>
-  Header: <jwt_token>
+  Authorization: <jwt_token>
 
   **response**: {
   data: [
@@ -305,7 +285,7 @@
   }
   }
 
-  **request**: {
+  **response**: {
   account: {
   accountId: 12342,
   accountName: "xxyy",
@@ -382,6 +362,9 @@
   2. Recovery Time Objective (RTO), If disaster strikes, how long should it take the system to be online?
   - RTO of 4 hours, clients can tolerate 4 hours of downtime.
   - Since it's a personal finance tool, RTO of 4 hours can be tolerated since there is no critical payment is done through our APIs.
+- Structured Logging mechanism
+  1. All endpoints emit structured JSON logs on every request, including: endpoints, userId, HTTP status, latency and timestamp
+  2. Errors include stack traces
 
   ==> For Banking systems, RPO should be zero and RTO should be minutes.
 
@@ -400,10 +383,11 @@
    - Monthly report generation writes to staging table, only after the generation is completed the staged report is swaped to a live table in a single transaction.
    - If the job crashes, the staging table will contain a partial data that the next run will overwrites, The job is idemponent (running the job twice for the same month will generate the same result)
 5. Authorization failures - account doesn't belong to user
-   - This case wont happen, because all account lookups filter by userId and accountId
+   - Threat model: any request with valid JWT could attempt to operate on resources belonging to another user
+   - Authorization layer always filter by `user_id` on every query touching tenant data, the API layer additionally verifies the account/category in the request payload belongs to the authenticated user before proceeding. If mismatch is detected, return 403 (or 404) and log a security event.
 6. Self transfer - from and to account are the same
    - A transaction where both entries reference the same account. The sum is still zero, so it passes the zero-sum validation, but it's meaningless — money going from Bank to Bank accomplishes nothing and clutters the transaction history.
-   - Decision: Transactions where are enteries reference same account are rejected with 400, Validated at the API layer before reach the DB.
+   - Decision: Transactions where are entries reference same account are rejected with 400, Validated at the API layer before reach the DB.
 7. Zero or negative amounts in entries
    - Zero amount in entries are meaningless and will be reject with 400, Validated at API layer
    - Negative amount for an entry is valid, negative amount means credit and positive amount means debit, the constraint is that they sum to zero.
@@ -434,7 +418,7 @@
     - More boilerplate than Kotlin
     - Accepted because Developer productivity matters more than runtime efficiency at this scale
 - Double-entry over Simplified model
-  - Chose true double-entry(transaction header + enteries table, zero-sum invarient) over simiplified (from/to columns on a single table), this support split transactions and is accounting correct
+  - Chose true double-entry(transaction header + entries table, zero-sum invarient) over simiplified (from/to columns on a single table), this support split transactions and is accounting correct
   - Trade-off:
     - Slightly more complex write path (insert header + multiple entries + update multiple balances in one database transaction)
     - More complex API payload (Array of entries instead of two account fields)
@@ -447,7 +431,7 @@
     - All queries must filter by status
     - Accepted because audit trial integrity is more important than storage cost at this scale
 - Single currency vs multi-currency
-  - V1 supports single currency per user(set at account creation), Multi-currency and cross-currency transfers deferred to V2
+  - V1 supports single currency (implicitly), Multi-currency and cross-currency transfers deferred to V2
   - Trade-off:
     - Users who deal in multiple currencies can't use the system accurately
     - Accepted because exchange rate handling, currency conversion logic and multi-currency reporting are each a significant features that would double the V1 timeline.
@@ -476,8 +460,6 @@
   - Unsure how to handle deadlocks when two transactions lock accounts in opposite order. Options: always lock accounts in a deterministic order (lower ID first) to prevent deadlocks entirely, or let Postgres detect deadlocks and retry at the application level. Haven't decided which approach is simpler to implement correctly.
 - Balance non-negativity - where to enforce it?
   - Unsure whether to enforce balance-non-negativity at the database level (CHECK constraint — bulletproof but poor error messages and hard to vary by account type) or application level (flexible but bypassable). Leaning toward application-level with a nightly reconciliation check as a safety net.
-- What happens to balances when a transaction is reversed?
-  - Unsure whether account balances should be stored and updated incrementally (faster, but a single bug can cause permanent drift) or computed on the fly from the sum of all active entries (always correct, but slower as transaction count grows). Could also store both and reconcile — but that adds complexity.
 - Should the background report job lock the data it's reading?
   - Unsure whether the monthly report job needs a consistent snapshot of the month's transactions. If a user creates a transaction while the job is running, the report might include some effects but not others. Options: run the report inside a REPEATABLE READ transaction (consistent snapshot but holds resources longer), or only generate reports for the previous month and assume the current month is still in flux.
   - I think if the report job for the last month will run at the first day of next month, we should be good
