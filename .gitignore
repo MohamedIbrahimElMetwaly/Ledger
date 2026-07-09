@@ -1,0 +1,20 @@
+
+# JAVA
+*.class
+*.jar
+*.war
+
+# Maven
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Environment
+.env
+*.log
