@@ -24,9 +24,9 @@
 
 ## 3. API Contract
 
-=> Base url: /api/v1
-=> Server decode the jwt_token and extract userId and use it in queries to
-=> All endpoints except /api/auth/login and /api/auth/register require a valid JWT in the Authorization: Bearer <jwt_token> header. The JWT payload contains userId and exp. The server extracts userId to scope all queries to the authenticated user. Tokens expire after 1 hour; expired tokens return 401. Refresh tokens are deferred to v2.
+=> Base url: /api/v1 <br>
+=> Server decode the jwt_token and extract userId and use it in queries to <br>
+=> All endpoints except /api/auth/login and /api/auth/register require a valid JWT in the Authorization: Bearer <jwt_token> header. The JWT payload contains userId and exp. The server extracts userId to scope all queries to the authenticated user. Tokens expire after 1 hour; expired tokens return 401. Refresh tokens are deferred to v2.<br>
 
 - POST: /api/auth/login
 
@@ -304,11 +304,14 @@
 
 -> Indexes:<br>
 
-- Transaction(user_id, created_at) for Time range queries <br>
-- Transaction(user_id, category_id) for category rollups <br>
-- Transaction(user_id, account_id) for account rollups <br>
+- Transactions (user_id, date) <br>
+- Transaction_entries (transaction_id)<br>
+- Transaction_entries (account_id) <br>
+- Transaction_entries (category_id) <br>
+- Accounts (user_id) <br>
+- Categories (user_id) WHERE deleted_at IS NULL <br>
 
--> For deletion, the column status is marked with DELETED instead of ACTIVE
+-> For deletion, the column deleted_at will have value of time of deletion instead of NULL
 
 ## 5. Key Flows
 
@@ -405,7 +408,7 @@
 
 - Postgres over MySQL
   - Postgres has better query support (CTEs, window functions) needed by reporting features
-  - Postgres has row-level locking(`SELECT FOR UPDATE`) for concurrent balance update patten
+  - Postgres has row-level locking(`SELECT FOR UPDATE`) for concurrent balance update pattern
   - Postgres has native JSONB support if we ever need flexible metadata on transactions
   - Trade-off:
     - MySQL has larger hiring pool, more hosting options at cheap tiers
